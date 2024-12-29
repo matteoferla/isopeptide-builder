@@ -14,13 +14,6 @@ Residue: types.ModuleType = prc.conformation.Residue
 # ----- test isopeptide ------------------------------
 
 
-
-
-
-
-
-
-
 class QuickLayoutMetric:
     """
     This is not a Rosetta score function, but a wrapper to it
@@ -34,5 +27,3 @@ class QuickLayoutMetric:
         self.test_template = self.create_ideal_isopeptide(self.ideal_distance)
         self.test_template.remove_constraints()
         constrain_isopeptide(self.test_template)
-
-

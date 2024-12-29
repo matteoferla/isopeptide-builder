@@ -1,8 +1,12 @@
+"""
+The class ``BaseScanner`` is a base class for the ``IsopetideScanner`` class.
+"""
+
 import types
 from typing import (Optional, Dict)
 import pyrosetta
 from .common import IsopetideType, create_weighted_scorefxn
-from .pose_operations import PoseOps
+from . import pose_operations as pose_ops
 
 prc: types.ModuleType = pyrosetta.rosetta.core
 Residue: types.ModuleType = prc.conformation.Residue
@@ -11,6 +15,14 @@ Residue: types.ModuleType = prc.conformation.Residue
 # ---------------------------------------------------------------------------------------------------------
 
 class BaseScanner:
+    """
+    :cvar residue_names: dictionary name3 to the Rosetta patched name3 for sidechain conjugation
+    :cvar atom_names: dictionary name3 to the atom name for the isopeptide bond connection
+    :ivar mode:  the wanted isopeptide type, the enum ``IsopetideType``, from __init__ argument
+    :ivar distance: the default distance of the isopeptide bond for the method ``create_ideal_isopeptide``
+    :ivar ideal_template: a pose containing only the relevant residues at the stated distance. Gets used as playdough
+    :ivar scorefxn: a score function with a dihedral constraint term, see ``common.create_weighted_scorefxn``
+    """
     residue_names = {'ASP': 'D[ASP:SidechainConjugation]',
                      'LYS': 'K[LYS:SidechainConjugation]',
                      }
@@ -20,11 +32,39 @@ class BaseScanner:
                  pose: pyrosetta.Pose,
                  mode: IsopetideType = IsopetideType.ASP_LYS_NONE,
                  distance: int = 9):
+        """
+        :param pose: the pose to scan
+        :param mode: the wanted isopeptide type, the enum ``IsopetideType``
+        :param distance: the default distance of the isopeptide bond for the method ``create_ideal_isopeptide``
+        """
         self.pose = pose
         self.mode: IsopetideType = mode
         self.distance = distance
-        self.ideal_template = self.create_ideal_isopeptide(distance)
-        self.scorefxn = create_weighted_scorefxn({prc.scoring.ScoreType.dihedral_constraint: 5})
+        self.scorefxn_cart = create_weighted_scorefxn({
+                                                    prc.scoring.ScoreType.coordinate_constraint: 1,
+                                                    prc.scoring.ScoreType.atom_pair_constraint: 5,
+                                                    prc.scoring.ScoreType.angle_constraint: 5,
+                                                    prc.scoring.ScoreType.dihedral_constraint: 5,
+                                                  },
+                                                 score_name='ref2015_cart')
+        self.scorefxn_cart_ex = create_weighted_scorefxn({
+            prc.scoring.ScoreType.coordinate_constraint: 1,
+            prc.scoring.ScoreType.atom_pair_constraint: 5,
+            prc.scoring.ScoreType.angle_constraint: 5,
+            prc.scoring.ScoreType.dihedral_constraint: 5,
+            prc.scoring.ScoreType.fa_sol: 0,  # ignore solvent
+            prc.scoring.ScoreType.fa_dun: 0,  # ignore rotamers
+        },
+            score_name='ref2015_cart')
+        self.scorefxn_internal = create_weighted_scorefxn({
+            prc.scoring.ScoreType.coordinate_constraint: 1,
+            prc.scoring.ScoreType.atom_pair_constraint: 5,
+            prc.scoring.ScoreType.angle_constraint: 5,
+            prc.scoring.ScoreType.dihedral_constraint: 5,
+        },
+            score_name='ref2015')
+        # this gets used as playdough:
+        self.ideal_template: pyrosetta.Pose = self.create_ideal_isopeptide(distance)
 
     @property
     def acid(self):
@@ -42,15 +82,17 @@ class BaseScanner:
 
     def create_ideal_isopeptide(self, distance: Optional[float] = None) -> pyrosetta.Pose:
         """
-        THis is just two residues connected and constrained
+        The returned pose is just two residues connected and constrained.
+        See ``_create_template`` for more.
+
+        The distance is enforced by a constraint on the CA atoms.
         """
         distance = distance if distance else self.distance
         pose = self._create_template()
-        pose_ops = PoseOps(pose)
-        pose_ops.remove_constraints()
-        pose_ops.constrain_isopeptide()
-        pose_ops.constrain_CA_distance(distance)
-        pose_ops.relax_weighted_cart(self.scorefxn)
+        pose_ops.remove_constraints(pose)
+        pose_ops.constrain_CA_distance(pose, distance)
+        pose_ops.constrain_isopeptide(pose)
+        pose_ops.relax_weighted_cart(pose, self.scorefxn_cart_ex)
         return pose
 
     def _create_template(self) -> pyrosetta.Pose:
@@ -66,7 +108,7 @@ class BaseScanner:
                                                   atom_name1=self.atom_names[self.acid],
                                                   seqpos2=2,
                                                   atom_name2=self.atom_names[self.base])
-        PoseOps(test).remove_termini((1, 2))
+        pose_ops.remove_termini(test, (1, 2))
         return test
 
     # ---------------------------------------------------------------------------------------------------------
